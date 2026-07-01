@@ -1,0 +1,23 @@
+# build directories
+build/
+cmake-build-*/
+
+# object / binary files
+*.o
+*.obj
+*.out
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+
+# editor / OS files
+.vscode/
+.idea/
+.DS_Store
+
+# temporary files
+*.tmp
+*.log
