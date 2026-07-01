@@ -14,9 +14,10 @@ cmake-build-*/
 *.lib
 
 # editor / OS files
-.vscode/
 .idea/
+/scratch/
 .DS_Store
+Makefile
 
 # temporary files
 *.tmp
