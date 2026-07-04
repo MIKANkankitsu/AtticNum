@@ -18,6 +18,7 @@ cmake-build-*/
 /scratch/
 .DS_Store
 Makefile
+compile_flags.txt
 
 # temporary files
 *.tmp
