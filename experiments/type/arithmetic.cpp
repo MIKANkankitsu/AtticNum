@@ -11,6 +11,8 @@ namespace attic {
 
    using bigint = mp::mpz_int;
 }
+
+//実数
 namespace attic::real {
     class Real {
         private:
@@ -41,9 +43,5 @@ namespace attic::real {
 
                 return A / pow10(oldP - newP);
             }
-
-            struct raw_tag {};
-
-            Real(attic::bigint A, std::int64_t P, raw_tag)
     };
 }
