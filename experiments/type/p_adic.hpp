@@ -102,6 +102,22 @@ class p_int {
         template <std::integral T>
         p_int(unchecked_prime_t tag, T int_p, uint64_t prime, uint64_t precision)
             : p_int(tag, to_mpz(int_p), prime, precision) {}
+        //中身を取り出す
+        uint64_t prime() const {
+            return prime_;
+        }
+
+        uint64_t precision() const {
+            return precision_;
+        }
+
+        const mpz_class& rep() const {
+            return int_p_;
+        }
+
+        const mpz_class& modulus() const {
+            return modulus_;
+        }
         //足し算
         p_int& operator+=(const p_int& rhs) {
             if (prime_ != rhs.prime_) {
