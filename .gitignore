@@ -19,6 +19,7 @@ cmake-build-*/
 .DS_Store
 Makefile
 compile_flags.txt
+.vscode/c_cpp_properties.json
 
 # temporary files
 *.tmp

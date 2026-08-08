@@ -36,11 +36,8 @@ class p_int {
         static bool is_prime_u64(uint64_t p) {
             if (p < 2) return false;
 
-            mpz_class z;
-            mpz_import(z.get_mpz_t(), 1, 1, sizeof(p), 0, 0, &p);
-
-            int r = mpz_probab_prime_p(z.get_mpz_t(), 25);
-            return r != 0;
+            mpz_class z = from_uint64(p);
+            return mpz_probab_prime_p(z.get_mpz_t(), 25) != 0;
         }
 
         static uint64_t checked_prime(uint64_t prime) {
@@ -54,7 +51,7 @@ class p_int {
         //コンストラクタ関連
         static mpz_class from_uint64(uint64_t x) {
             mpz_class z;
-            mpz_import(z.get_mpz_t(), 1, 1, sizeof(x), 0, 0, &x);
+            mpz_set_ui(z.get_mpz_t(), x);
             return z;
         }
 
@@ -90,8 +87,7 @@ class p_int {
         }
 
         static bool divisible_by_prime(const mpz_class& value, uint64_t prime) {
-            mpz_class p = from_uint64(prime);
-            return value % p == 0;
+            return mpz_divisible_ui_p(value.get_mpz_t(), prime) != 0;
         }
 
         static void require_p_integral(const mpq_class& value, uint64_t prime) {
@@ -101,8 +97,11 @@ class p_int {
         }
 
         static void normalize_mod(mpz_class& value, const mpz_class& modulus) {
-            value %= modulus;
-            if (value < 0) value += modulus;
+            mpz_mod(value.get_mpz_t(), value.get_mpz_t(), modulus.get_mpz_t());
+        }
+
+        static void normalize_mod(mpz_class& r, const mpz_class& a, const mpz_class& m) {
+            mpz_mod(r.get_mpz_t(), a.get_mpz_t(), m.get_mpz_t());
         }
 
         //Hensel持ち上げを利用した高速な有限精度除算
@@ -117,27 +116,33 @@ class p_int {
             }
 
             mpz_class p = from_uint64(prime);
-            mpz_class value_mod_p = value;
-            normalize_mod(value_mod_p, p);
+            mpz_class value_mod_p;
+            normalize_mod(value_mod_p, value, p);
 
-            mpz_class den_inv;
-            if (mpz_invert(den_inv.get_mpz_t(), value_mod_p.get_mpz_t(), p.get_mpz_t()) == 0) {
+            mpz_class inv;
+            if (mpz_invert(inv.get_mpz_t(), value_mod_p.get_mpz_t(), p.get_mpz_t()) == 0) {
                 throw std::domain_error("p_int value is not invertible modulo prime");
             }
 
-            mpz_class inv = std::move(den_inv);
             uint64_t lifted_precision = 1;
+            mpz_class lifted_modulus = p;
+            mpz_class value_mod, temp;
             while (lifted_precision < precision) {
-                lifted_precision = lifted_precision > precision / 2
-                    ? precision
-                    : lifted_precision * 2;
-                mpz_class lifted_modulus = lifted_precision == precision
-                    ? modulus
-                    : make_modulus(prime, lifted_precision);
+                if (lifted_precision < (precision >> 1)) {
+                    lifted_precision <<= 1;
+                    lifted_modulus *= lifted_modulus;
+                } else {
+                    lifted_precision = precision;
+                    lifted_modulus = modulus;
+                }
+                
+                normalize_mod(value_mod, value, lifted_modulus);
 
-                mpz_class value_mod = value;
-                normalize_mod(value_mod, lifted_modulus);
-                inv *= (2 - value_mod * inv);
+                // temp = 2 - value_mod * inv
+                mpz_set_ui(temp.get_mpz_t(), 2);
+                mpz_submul(temp.get_mpz_t(), value_mod.get_mpz_t(), inv.get_mpz_t());
+
+                inv *= temp;
                 normalize_mod(inv, lifted_modulus);
             }
 
