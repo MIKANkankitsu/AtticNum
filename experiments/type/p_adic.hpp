@@ -177,12 +177,8 @@ class p_int {
               modulus_(precision == 0 ? mpz_class(0) : make_modulus(prime_, precision_)),
               int_p_(precision == 0 ? mpz_class(0) : std::move(value)),
               exact_q_(precision == 0 ? mpq_class(value) : mpq_class(0)) {
-            if (is_exact()) {
-                exact_q_.canonicalize();
-                require_p_integral(exact_q_, prime_);
-            } else {
-                normalize();
-            }
+            
+            normalize();
         }
 
         p_int(mpz_class value, uint64_t prime, uint64_t precision)
@@ -194,12 +190,12 @@ class p_int {
               modulus_(precision == 0 ? mpz_class(0) : make_modulus(prime_, precision_)),
               int_p_(0),
               exact_q_(0) {
+            
             value.canonicalize();
             require_p_integral(value, prime_);
 
             if (is_exact()) {
                 exact_q_ = std::move(value);
-                exact_q_.canonicalize();
             } else {
                 int_p_ = finite_rep_from_q(value, prime_, modulus_, precision_);
             }
@@ -217,19 +213,11 @@ class p_int {
             : p_int(tag, to_mpz(value), prime, precision) {}
 
         //各要素取得
-        bool is_exact() const {
-            return precision_ == 0;
-        }
+        bool is_exact() const { return precision_ == 0; }
+        uint64_t prime() const { return prime_; }
+        uint64_t precision() const { return precision_; }
 
-        uint64_t prime() const {
-            return prime_;
-        }
-
-        uint64_t precision() const {
-            return precision_;
-        }
-
-        //reprentative: 代表元
+        //representative: 代表元
         const mpz_class& rep() const {
             if (is_exact()) {
                 throw std::logic_error("p_int::rep() is only valid for finite values");
@@ -256,12 +244,12 @@ class p_int {
 
         //精度変更、より精度が低い方に変更する
         p_int to_precision(uint64_t target_precision) const {
-            if (target_precision == 0) {
-                if (!is_exact()) {
-                    throw std::domain_error("cannot recover an exact p_int from a finite value");
-                }
-
+            if (precision_ == target_precision) {
                 return *this;
+            }
+
+            if (target_precision == 0) {
+                throw std::domain_error("cannot recover an exact p_int from a finite value");
             }
 
             if (is_exact()) {
@@ -279,9 +267,22 @@ class p_int {
         p_int& operator+=(const p_int& rhs) {
             require_same_prime(rhs);
 
+            if (precision() == rhs.precision()) {
+                if (!is_exact()) {
+                    int_p_ += rhs.int_p_;
+                } else {
+
+                }
+                
+            }
+            
+        }
+
+        p_int& operator+=(const p_int& rhs) {
+            require_same_prime(rhs);
+
             if (is_exact() && rhs.is_exact()) {
                 exact_q_ += rhs.exact_q_;
-                exact_q_.canonicalize();
                 return *this;
             }
 
