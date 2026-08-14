@@ -10,7 +10,7 @@
 #include <utility>
 
 // sizeof(unsigned long) が 8 バイト未満ならコンパイルエラーにしてビルドを中断
-static_assert(sizeof(unsigned long) >= 8, 
+static_assert(sizeof(unsigned long) >= 8,
     "unsigned long int must be at least 64-bit (8 bytes). "
     "Windows (LLP64) is not directly supported without 64-bit truncation helpers!");
 
@@ -187,11 +187,11 @@ class p_int {
 
         template <std::integral T>
         p_int(T value, uint64_t prime, uint64_t precision)
-            : p_int(to_mpz(value), prime, precision) {}
+            : p_int(mpz_class(value), prime, precision) {}
 
         template <std::integral T>
-        p_int(unchecked_prime_t tag, T value, uint64_t prime, uint64_t precision)
-            : p_int(tag, to_mpz(value), prime, precision) {}
+        p_int(T value, uint64_t prime, uint64_t precision, mpz_class modulus)
+            : p_int(mpz_class(value), prime, precision, std::move(modulus)) {}
 
         //各要素取得
         bool is_exact() const { return precision_ == 0; }

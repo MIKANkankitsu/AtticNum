@@ -61,6 +61,15 @@ static_assert(sizeof(unsigned long) >= 8,
     "unsigned long int must be at least 64-bit (8 bytes). "
     "Windows (LLP64) is not directly supported without 64-bit truncation helpers!");
 
+// int main() {
+//     std::cout << sizeof(unsigned long int) << " " << sizeof(uint64_t) << std::endl;
+// }
+
 int main() {
-    std::cout << sizeof(unsigned long int) << " " << sizeof(uint64_t) << std::endl;
+    mpz_class a = 12346;
+
+    std::cout << mpz_divisible_ui_p(a.get_mpz_t(),(uint64_t)5) << std::endl;
+    // mpz_divisible_ui_pは、割り切れるなら0以外,そうでないなら0を返す
+
+    return 0;
 }
