@@ -37,6 +37,11 @@ class p_int {
 
         mpq_class exact_q_;
 
+        struct precision_info {
+            uint64_t precision;
+            mpz_class modulus;
+        };
+
         //素数判定
         static bool is_prime_u64(uint64_t p) {
             if (p < 2) return false;
@@ -65,6 +70,21 @@ class p_int {
             if (a == 0) return b;
             if (b == 0) return a;
             return std::min(a, b);
+        }
+
+        static precision_info combine_precision_info(const p_int& lhs, const p_int& rhs) {
+            if (lhs.is_exact()) {
+                return {rhs.precision_, rhs.modulus_};
+            }
+            if (rhs.is_exact()) {
+                return {lhs.precision_, lhs.modulus_};
+            }
+
+            if (lhs.precision_ <= rhs.precision_) {
+                return {lhs.precision_, lhs.modulus_};
+            } else {
+                return {rhs.precision_, rhs.modulus_};
+            }
         }
 
         static bool divisible_by_prime(const mpz_class& value, uint64_t prime) {
@@ -150,6 +170,21 @@ class p_int {
             }
         }
 
+        void truncate_to_precision(uint64_t target_prec, const mpz_class& target_mod) {
+            if (target_prec == 0) throw /*some error*/;
+
+            if (is_exact()) {
+                int_p_ = finite_rep_from_q(exact_q_, prime_, target_mod, target_prec);
+                exact_q_ = 0;
+            } else {
+                if (precision_ == target_prec) return;
+                normalize_mod(int_p_, target_mod);
+            }
+
+            precision_ = target_prec;
+            modulus_ = target_mod;
+        }
+
     public:
         //コンストラクタ
 
@@ -160,7 +195,7 @@ class p_int {
               modulus_(precision == 0 ? mpz_class(0) : std::move(modulus)),
               int_p_(precision == 0 ? mpz_class(0) : std::move(value)),
               exact_q_(precision == 0 ? mpq_class(value) : mpq_class(0)) {
-            
+
             normalize();
         }
 
@@ -171,7 +206,7 @@ class p_int {
               modulus_(precision == 0 ? mpz_class(0) : std::move(modulus)),
               int_p_(0),
               exact_q_(0) {
-            
+
             value.canonicalize();
             require_p_integral(value, prime_);
 
@@ -182,22 +217,6 @@ class p_int {
             }
         }
 
-        // uncheck nomod z  -->  uncheck mod z
-        p_int(unchecked_prime_t tag, mpz_class value, uint64_t prime, uint64_t precision)
-            : p_int(tag, std::move(value), prime, precision, precision == 0 ? mpz_class(0) : make_modulus(prime, precision)) {}
-
-        // uncheck nomod q  -->  uncheck mod q
-        p_int(unchecked_prime_t tag, mpq_class value, uint64_t prime, uint64_t precision)
-            : p_int(tag, std::move(value), prime, precision, precision == 0 ? mpz_class(0) : make_modulus(prime, precision)) {}
-
-        // check mod z  -->  uncheck mod z
-        p_int(mpz_class value, uint64_t prime, uint64_t precision, mpz_class modulus)
-            : p_int(unchecked_prime, std::move(value), checked_prime(prime), precision, std::move(modulus)) {}
-
-        // check mod q  -->  uncheck mod q
-        p_int(mpq_class value, uint64_t prime, uint64_t precision, mpz_class modulus)
-            : p_int(unchecked_prime, std::move(value), checked_prime(prime), precision, std::move(modulus)) {}
-
         // check nomod z  -->  uncheck nomod z
         p_int(mpz_class value, uint64_t prime, uint64_t precision)
             : p_int(unchecked_prime, std::move(value), checked_prime(prime), precision) {}
@@ -206,25 +225,18 @@ class p_int {
         p_int(mpq_class value, uint64_t prime, uint64_t precision)
             : p_int(unchecked_prime, std::move(value), checked_prime(prime), precision) {}
 
-        // uncheck nomod T  -->  uncheck nomod z
-        template <std::integral T>
-        p_int(unchecked_prime_t tag, T value, uint64_t prime, uint64_t precision)
-            : p_int(tag, mpz_class(value), prime, precision) {}
-
-        // uncheck mod T  -->  uncheck mod z
-        template <std::integral T>
-        p_int(unchecked_prime_t tag, T value, uint64_t prime, uint64_t precision, mpz_class modulus)
-            : p_int(tag, mpz_class(value), prime, precision, std::move(modulus)) {}
-
         // check nomod T  -->  check nomod z
         template <std::integral T>
         p_int(T value, uint64_t prime, uint64_t precision)
             : p_int(mpz_class(value), prime, precision) {}
 
-        // check mod T -->  check mod z
-        template <std::integral T>
-        p_int(T value, uint64_t prime, uint64_t precision, mpz_class modulus)
-            : p_int(mpz_class(value), prime, precision, std::move(modulus)) {}
+        // uncheck nomod z  -->  uncheck mod z
+        p_int(unchecked_prime_t tag, mpz_class value, uint64_t prime, uint64_t precision)
+            : p_int(tag, std::move(value), prime, precision, precision == 0 ? mpz_class(0) : make_modulus(prime, precision)) {}
+
+        // uncheck nomod q  -->  uncheck mod q
+        p_int(unchecked_prime_t tag, mpq_class value, uint64_t prime, uint64_t precision)
+            : p_int(tag, std::move(value), prime, precision, precision == 0 ? mpz_class(0) : make_modulus(prime, precision)) {}
 
         //各要素取得
         bool is_exact() const { return precision_ == 0; }
@@ -293,34 +305,18 @@ class p_int {
                 return *this;
             }
 
-            if (precision_ < rhs.precision_) {
-                if (is_exact()) {
-                    // exact += finite 右の設定を引きつぐ
-                    int_p_ = finite_rep_from_q(exact_q_, prime_, rhs.modulus_, rhs.precision_) + rhs.int_p_;
-                    normalize_mod(int_p_, rhs.modulus_);
-                    exact_q_ = 0;
-                    precision_ = rhs.precision_;
-                    modulus_ = rhs.modulus_;
-                } else {
-                    // low += high
-                    int_p_ += rhs.int_p_;
-                    normalize_mod(int_p_, modulus_);
-                }
-                return *this;
-            } else { // precision_ > rhs.precision_
-                if (rhs.is_exact()) {
-                    // finite += exact
-                    int_p_ += finite_rep_from_q(rhs.exact_q_, prime_, modulus_, precision_);
-                    normalize_mod(int_p_, modulus_);
-                } else {
-                    // high += low
-                    int_p_ += rhs.int_p_;
-                    normalize_mod(int_p_, rhs.modulus_);
-                    precision_ = rhs.precision_;
-                    modulus_ = rhs.modulus_;
-                }
-                return *this;
+            auto [target_prec, target_mod] = combine_precision_info(*this, rhs);
+            this->truncate_to_precision(target_prec, target_mod);
+
+            if (!rhs.is_exact()) {
+                int_p_ += rhs.int_p_;
+            } else {
+                int_p_ += finite_rep_from_q(rhs.exact_q_, prime_, target_mod, target_prec);
             }
+
+            normalize_mod(int_p_, modulus_);
+
+            return *this;
         }
 
         template <integer_like T>
@@ -367,34 +363,18 @@ class p_int {
                 return *this;
             }
 
-            if (precision_ < rhs.precision_) {
-                if (is_exact()) {
-                    // exact -= finite 右の設定を引きつぐ
-                    int_p_ = finite_rep_from_q(exact_q_, prime_, rhs.modulus_, rhs.precision_) - rhs.int_p_;
-                    normalize_mod(int_p_, rhs.modulus_);
-                    exact_q_ = 0;
-                    precision_ = rhs.precision_;
-                    modulus_ = rhs.modulus_;
-                } else {
-                    // low -= high
-                    int_p_ -= rhs.int_p_;
-                    normalize_mod(int_p_, modulus_);
-                }
-                return *this;
-            } else { // precision_ > rhs.precision_
-                if (rhs.is_exact()) {
-                    // finite -= exact
-                    int_p_ -= finite_rep_from_q(rhs.exact_q_, prime_, modulus_, precision_);
-                    normalize_mod(int_p_, modulus_);
-                } else {
-                    // high -= low
-                    int_p_ -= rhs.int_p_;
-                    normalize_mod(int_p_, rhs.modulus_);
-                    precision_ = rhs.precision_;
-                    modulus_ = rhs.modulus_;
-                }
-                return *this;
+            auto [target_prec, target_mod] = combine_precision_info(*this, rhs);
+            this->truncate_to_precision(target_prec, target_mod);
+
+            if (!rhs.is_exact()) {
+                int_p_ -= rhs.int_p_;
+            } else {
+                int_p_ -= finite_rep_from_q(rhs.exact_q_, prime_, target_mod, target_prec);
             }
+
+            normalize_mod(int_p_, modulus_);
+
+            return *this;
         }
 
         template <integer_like T>
@@ -451,34 +431,22 @@ class p_int {
                 return *this;
             }
 
-            if (precision_ < rhs.precision_) {
-                if (is_exact()) {
-                    // exact *= finite 右の設定を引きつぐ
-                    int_p_ = finite_rep_from_q(exact_q_, prime_, rhs.modulus_, rhs.precision_) * rhs.int_p_;
-                    normalize_mod(int_p_, rhs.modulus_);
-                    exact_q_ = 0;
-                    precision_ = rhs.precision_;
-                    modulus_ = rhs.modulus_;
+            auto [target_prec, target_mod] = combine_precision_info(*this, rhs);
+            truncate_to_precision(target_prec, target_mod);
+
+            if (!rhs.is_exact()) {
+                if (rhs.precision_ > target_prec) {
+                    int_p_ *= (rhs.int_p_ % target_mod);
                 } else {
-                    // low *= high
                     int_p_ *= rhs.int_p_;
-                    normalize_mod(int_p_, modulus_);
                 }
-                return *this;
-            } else { // precision_ > rhs.precision_
-                if (rhs.is_exact()) {
-                    // finite *= exact
-                    int_p_ *= finite_rep_from_q(rhs.exact_q_, prime_, modulus_, precision_);
-                    normalize_mod(int_p_, modulus_);
-                } else {
-                    // high *= low
-                    int_p_ *= rhs.int_p_;
-                    normalize_mod(int_p_, rhs.modulus_);
-                    precision_ = rhs.precision_;
-                    modulus_ = rhs.modulus_;
-                }
-                return *this;
+            } else {
+                int_p_ *= finite_rep_from_q(rhs.exact_q_, prime_, target_mod, target_prec);
             }
+
+            normalize_mod(int_p_, modulus_);
+
+            return *this;
         }
 
         template <integer_like T>
@@ -536,7 +504,7 @@ class p_int {
             }
 
             mpz_class inv = inverse_mod_prime_power(int_p_, prime_, precision_, modulus_);
-            return p_int(unchecked_prime, std::move(inv), prime_, precision_);
+            return p_int(unchecked_prime, std::move(inv), prime_, precision_, modulus_);
         }
 
         p_int& operator/=(const p_int& rhs) {
