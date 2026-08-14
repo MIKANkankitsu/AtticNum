@@ -9,6 +9,11 @@
 #include <type_traits>
 #include <utility>
 
+// sizeof(unsigned long) が 8 バイト未満ならコンパイルエラーにしてビルドを中断
+static_assert(sizeof(unsigned long) >= 8, 
+    "unsigned long int must be at least 64-bit (8 bytes). "
+    "Windows (LLP64) is not directly supported without 64-bit truncation helpers!");
+
 namespace attic {
 
 struct unchecked_prime_t {
@@ -36,7 +41,7 @@ class p_int {
         static bool is_prime_u64(uint64_t p) {
             if (p < 2) return false;
 
-            mpz_class z = from_uint64(p);
+            mpz_class z = p;
             return mpz_probab_prime_p(z.get_mpz_t(), 25) != 0;
         }
 
@@ -49,30 +54,6 @@ class p_int {
         }
 
         //コンストラクタ関連
-        static mpz_class from_uint64(uint64_t x) {
-            mpz_class z;
-            mpz_set_ui(z.get_mpz_t(), x);
-            return z;
-        }
-
-        static mpz_class from_int64(int64_t x) {
-            if (x >= 0) {
-                return from_uint64(static_cast<uint64_t>(x));
-            }
-
-            uint64_t mag = static_cast<uint64_t>(-(x + 1)) + 1;
-            return -from_uint64(mag);
-        }
-
-        template <std::integral T>
-        static mpz_class to_mpz(T x) {
-            if constexpr (std::is_signed_v<T>) {
-                return from_int64(static_cast<int64_t>(x));
-            } else {
-                return from_uint64(static_cast<uint64_t>(x));
-            }
-        }
-
         static mpz_class make_modulus(uint64_t prime, uint64_t precision) {
             mpz_class mod;
             mpz_ui_pow_ui(mod.get_mpz_t(), prime, precision);
@@ -115,7 +96,7 @@ class p_int {
                 throw std::logic_error("inverse modulo p^precision requires finite precision");
             }
 
-            mpz_class p = from_uint64(prime);
+            mpz_class p = prime;
             mpz_class value_mod_p;
             normalize_mod(value_mod_p, value, p);
 
@@ -151,8 +132,8 @@ class p_int {
 
         //exactから有限精度
         static mpz_class finite_rep_from_q(const mpq_class& value, uint64_t prime, const mpz_class& modulus, uint64_t precision) {
-            mpz_class den_inv = inverse_mod_prime_power(value.get_den(), prime, precision, modulus);
-            mpz_class rep = value.get_num() * den_inv;
+            mpz_class rep = inverse_mod_prime_power(value.get_den(), prime, precision, modulus);
+            rep *= value.get_num();
             normalize_mod(rep, modulus);
             return rep;
         }
@@ -450,6 +431,7 @@ class p_int {
         //割り算
         bool is_zero() const {
             return is_exact() ? exact_q_ == 0 : int_p_ == 0;
+            // return (exact_q_ == 0) && (int_p_ == 0);
         }
 
         bool is_unit() const {
@@ -458,7 +440,7 @@ class p_int {
                 return !divisible_by_prime(exact_q_.get_num(), prime_);
             }
 
-            return int_p_ % from_uint64(prime_) != 0;
+            return !divisible_by_prime(int_p_, prime_);
         }
 
         p_int inverse() const {
@@ -467,9 +449,8 @@ class p_int {
             }
 
             if (is_exact()) {
-                mpq_class inv(exact_q_.get_den(), exact_q_.get_num());
-                inv.canonicalize();
-                require_p_integral(inv, prime_);
+                mpq_class inv = 1 / exact_q_;
+                // もうunitと確定しているので、逆数の分母はpで割り切れない
                 return p_int(unchecked_prime, std::move(inv), prime_, 0);
             }
 
