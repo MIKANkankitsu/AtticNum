@@ -152,23 +152,23 @@ class p_int {
 
     public:
         //コンストラクタ
-        p_int(unchecked_prime_t, mpz_class value, uint64_t prime, uint64_t precision)
+
+        // uncheck mod z
+        p_int(unchecked_prime_t, mpz_class value, uint64_t prime, uint64_t precision, mpz_class modulus)
             : prime_(prime),
               precision_(precision),
-              modulus_(precision == 0 ? mpz_class(0) : make_modulus(prime_, precision_)),
+              modulus_(precision == 0 ? mpz_class(0) : std::move(modulus)),
               int_p_(precision == 0 ? mpz_class(0) : std::move(value)),
               exact_q_(precision == 0 ? mpq_class(value) : mpq_class(0)) {
             
             normalize();
         }
 
-        p_int(mpz_class value, uint64_t prime, uint64_t precision)
-            : p_int(unchecked_prime, std::move(value), checked_prime(prime), precision) {}
-
-        p_int(unchecked_prime_t, mpq_class value, uint64_t prime, uint64_t precision)
+        // uncheck mod q
+        p_int(unchecked_prime_t, mpq_class value, uint64_t prime, uint64_t precision, mpz_class modulus)
             : prime_(prime),
               precision_(precision),
-              modulus_(precision == 0 ? mpz_class(0) : make_modulus(prime_, precision_)),
+              modulus_(precision == 0 ? mpz_class(0) : std::move(modulus)),
               int_p_(0),
               exact_q_(0) {
             
@@ -182,13 +182,46 @@ class p_int {
             }
         }
 
+        // uncheck nomod z  -->  uncheck mod z
+        p_int(unchecked_prime_t tag, mpz_class value, uint64_t prime, uint64_t precision)
+            : p_int(tag, std::move(value), prime, precision, precision == 0 ? mpz_class(0) : make_modulus(prime, precision)) {}
+
+        // uncheck nomod q  -->  uncheck mod q
+        p_int(unchecked_prime_t tag, mpq_class value, uint64_t prime, uint64_t precision)
+            : p_int(tag, std::move(value), prime, precision, precision == 0 ? mpz_class(0) : make_modulus(prime, precision)) {}
+
+        // check mod z  -->  uncheck mod z
+        p_int(mpz_class value, uint64_t prime, uint64_t precision, mpz_class modulus)
+            : p_int(unchecked_prime, std::move(value), checked_prime(prime), precision, std::move(modulus)) {}
+
+        // check mod q  -->  uncheck mod q
+        p_int(mpq_class value, uint64_t prime, uint64_t precision, mpz_class modulus)
+            : p_int(unchecked_prime, std::move(value), checked_prime(prime), precision, std::move(modulus)) {}
+
+        // check nomod z  -->  uncheck nomod z
+        p_int(mpz_class value, uint64_t prime, uint64_t precision)
+            : p_int(unchecked_prime, std::move(value), checked_prime(prime), precision) {}
+
+        // check nomod q  -->  uncheck nomod q
         p_int(mpq_class value, uint64_t prime, uint64_t precision)
             : p_int(unchecked_prime, std::move(value), checked_prime(prime), precision) {}
 
+        // uncheck nomod T  -->  uncheck nomod z
+        template <std::integral T>
+        p_int(unchecked_prime_t tag, T value, uint64_t prime, uint64_t precision)
+            : p_int(tag, mpz_class(value), prime, precision) {}
+
+        // uncheck mod T  -->  uncheck mod z
+        template <std::integral T>
+        p_int(unchecked_prime_t tag, T value, uint64_t prime, uint64_t precision, mpz_class modulus)
+            : p_int(tag, mpz_class(value), prime, precision, std::move(modulus)) {}
+
+        // check nomod T  -->  check nomod z
         template <std::integral T>
         p_int(T value, uint64_t prime, uint64_t precision)
             : p_int(mpz_class(value), prime, precision) {}
 
+        // check mod T -->  check mod z
         template <std::integral T>
         p_int(T value, uint64_t prime, uint64_t precision, mpz_class modulus)
             : p_int(mpz_class(value), prime, precision, std::move(modulus)) {}
