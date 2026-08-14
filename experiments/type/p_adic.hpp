@@ -441,29 +441,55 @@ class p_int {
         p_int& operator*=(const p_int& rhs) {
             require_same_prime(rhs);
 
-            if (is_exact() && rhs.is_exact()) {
-                exact_q_ *= rhs.exact_q_;
-                exact_q_.canonicalize();
+            if (precision_ == rhs.precision_) {
+                if (is_exact()) {
+                    exact_q_ *= rhs.exact_q_;
+                } else {
+                    int_p_ *= rhs.int_p_;
+                    normalize_mod(int_p_, modulus_);
+                }
                 return *this;
             }
 
-            uint64_t precision = combine_precision(precision_, rhs.precision_);
-            p_int l = to_precision(precision);
-            p_int r = rhs.to_precision(precision);
-            l.int_p_ *= r.int_p_;
-            l.normalize();
-            *this = std::move(l);
-            return *this;
+            if (precision_ < rhs.precision_) {
+                if (is_exact()) {
+                    // exact *= finite 右の設定を引きつぐ
+                    int_p_ = finite_rep_from_q(exact_q_, prime_, rhs.modulus_, rhs.precision_) * rhs.int_p_;
+                    normalize_mod(int_p_, rhs.modulus_);
+                    exact_q_ = 0;
+                    precision_ = rhs.precision_;
+                    modulus_ = rhs.modulus_;
+                } else {
+                    // low *= high
+                    int_p_ *= rhs.int_p_;
+                    normalize_mod(int_p_, modulus_);
+                }
+                return *this;
+            } else { // precision_ > rhs.precision_
+                if (rhs.is_exact()) {
+                    // finite *= exact
+                    int_p_ *= finite_rep_from_q(rhs.exact_q_, prime_, modulus_, precision_);
+                    normalize_mod(int_p_, modulus_);
+                } else {
+                    // high *= low
+                    int_p_ *= rhs.int_p_;
+                    normalize_mod(int_p_, rhs.modulus_);
+                    precision_ = rhs.precision_;
+                    modulus_ = rhs.modulus_;
+                }
+                return *this;
+            }
         }
 
         template <integer_like T>
         p_int& operator*=(T&& rhs) {
-            return *this *= p_int(
-                unchecked_prime,
-                std::forward<T>(rhs),
-                prime_,
-                0
-            );
+            if (is_exact()) {
+                exact_q_ *= rhs;
+            } else {
+                int_p_ *= rhs;
+                normalize_mod(int_p_, modulus_);
+            }
+            return *this;
         }
 
         friend p_int operator*(p_int lhs, const p_int& rhs) {
@@ -478,16 +504,9 @@ class p_int {
         }
 
         template <integer_like T>
-        friend p_int operator*(T&& lhs, const p_int& rhs) {
-            p_int result(
-                unchecked_prime,
-                std::forward<T>(lhs),
-                rhs.prime_,
-                0
-            );
-
-            result *= rhs;
-            return result;
+        friend p_int operator*(T&& lhs, p_int rhs) {
+            rhs *= std::forward<T>(lhs);
+            return rhs;
         }
 
         //割り算
