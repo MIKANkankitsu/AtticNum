@@ -1,6 +1,7 @@
 # build directories
 build/
 cmake-build-*/
+.vscode/
 
 # object / binary files
 *.o
@@ -20,6 +21,7 @@ cmake-build-*/
 Makefile
 compile_flags.txt
 .vscode/c_cpp_properties.json
+CMakeLists.txt
 
 # temporary files
 *.tmp

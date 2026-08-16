@@ -133,7 +133,7 @@ class p_int {
             mpz_class lifted_modulus = p;
             mpz_class value_mod, temp;
             while (lifted_precision < precision) {
-                if (lifted_precision < (precision >> 1)) {
+                if (lifted_precision <= (precision >> 1)) {
                     lifted_precision <<= 1;
                     lifted_modulus *= lifted_modulus;
                 } else {
@@ -291,6 +291,20 @@ class p_int {
             }
 
             return p_int(unchecked_prime, int_p_, prime_, target_precision);
+        }
+
+        friend bool operator==(const p_int& lhs, const p_int& rhs) {
+            if (lhs.prime_ != rhs.prime_ || lhs.precision_ != rhs.precision_) return false;
+
+            if (lhs.is_exact()) {
+                return lhs.exact_q_ == rhs.exact_q_;
+            } else {
+                return lhs.int_p_ == rhs.int_p_;
+            }
+        }
+
+        friend bool operator!=(const p_int& lhs, const p_int& rhs) {
+            return !(lhs == rhs);
         }
 
         //足し算
