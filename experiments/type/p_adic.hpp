@@ -9,11 +9,6 @@
 #include <type_traits>
 #include <utility>
 
-// sizeof(unsigned long) が 8 バイト未満ならコンパイルエラーにしてビルドを中断
-static_assert(sizeof(unsigned long) >= 8,
-    "unsigned long int must be at least 64-bit (8 bytes). "
-    "Windows (LLP64) is not directly supported without 64-bit truncation helpers!");
-
 namespace attic {
 
 struct unchecked_prime_t {
@@ -37,16 +32,11 @@ class p_int {
 
         mpq_class exact_q_;
 
-        struct precision_info {
-            uint64_t precision;
-            mpz_class modulus;
-        };
-
         //素数判定
         static bool is_prime_u64(uint64_t p) {
             if (p < 2) return false;
 
-            mpz_class z = p;
+            mpz_class z = from_uint64(p);
             return mpz_probab_prime_p(z.get_mpz_t(), 25) != 0;
         }
 
@@ -59,6 +49,30 @@ class p_int {
         }
 
         //コンストラクタ関連
+        static mpz_class from_uint64(uint64_t x) {
+            mpz_class z;
+            mpz_set_ui(z.get_mpz_t(), x);
+            return z;
+        }
+
+        static mpz_class from_int64(int64_t x) {
+            if (x >= 0) {
+                return from_uint64(static_cast<uint64_t>(x));
+            }
+
+            uint64_t mag = static_cast<uint64_t>(-(x + 1)) + 1;
+            return -from_uint64(mag);
+        }
+
+        template <std::integral T>
+        static mpz_class to_mpz(T x) {
+            if constexpr (std::is_signed_v<T>) {
+                return from_int64(static_cast<int64_t>(x));
+            } else {
+                return from_uint64(static_cast<uint64_t>(x));
+            }
+        }
+
         static mpz_class make_modulus(uint64_t prime, uint64_t precision) {
             mpz_class mod;
             mpz_ui_pow_ui(mod.get_mpz_t(), prime, precision);
@@ -70,21 +84,6 @@ class p_int {
             if (a == 0) return b;
             if (b == 0) return a;
             return std::min(a, b);
-        }
-
-        static precision_info combine_precision_info(const p_int& lhs, const p_int& rhs) {
-            if (lhs.is_exact()) {
-                return {rhs.precision_, rhs.modulus_};
-            }
-            if (rhs.is_exact()) {
-                return {lhs.precision_, lhs.modulus_};
-            }
-
-            if (lhs.precision_ <= rhs.precision_) {
-                return {lhs.precision_, lhs.modulus_};
-            } else {
-                return {rhs.precision_, rhs.modulus_};
-            }
         }
 
         static bool divisible_by_prime(const mpz_class& value, uint64_t prime) {
@@ -105,10 +104,6 @@ class p_int {
             mpz_mod(r.get_mpz_t(), a.get_mpz_t(), m.get_mpz_t());
         }
 
-        static void normalize_mod(mpz_class& r, const mpz_class& a, uint64_t m) {
-            mpz_mod_ui(r.get_mpz_t(), a.get_mpz_t(), m);
-        }
-
         //Hensel持ち上げを利用した高速な有限精度除算
         static mpz_class inverse_mod_prime_power(
                 const mpz_class& value,
@@ -120,9 +115,9 @@ class p_int {
                 throw std::logic_error("inverse modulo p^precision requires finite precision");
             }
 
-            mpz_class p = prime;
+            mpz_class p = from_uint64(prime);
             mpz_class value_mod_p;
-            normalize_mod(value_mod_p, value, prime);
+            normalize_mod(value_mod_p, value, p);
 
             mpz_class inv;
             if (mpz_invert(inv.get_mpz_t(), value_mod_p.get_mpz_t(), p.get_mpz_t()) == 0) {
@@ -133,7 +128,7 @@ class p_int {
             mpz_class lifted_modulus = p;
             mpz_class value_mod, temp;
             while (lifted_precision < precision) {
-                if (lifted_precision <= (precision >> 1)) {
+                if (lifted_precision < (precision >> 1)) {
                     lifted_precision <<= 1;
                     lifted_modulus *= lifted_modulus;
                 } else {
@@ -144,7 +139,7 @@ class p_int {
                 normalize_mod(value_mod, value, lifted_modulus);
 
                 // temp = 2 - value_mod * inv
-                temp = 2;
+                mpz_set_ui(temp.get_mpz_t(), 2);
                 mpz_submul(temp.get_mpz_t(), value_mod.get_mpz_t(), inv.get_mpz_t());
 
                 inv *= temp;
@@ -156,8 +151,8 @@ class p_int {
 
         //exactから有限精度
         static mpz_class finite_rep_from_q(const mpq_class& value, uint64_t prime, const mpz_class& modulus, uint64_t precision) {
-            mpz_class rep = inverse_mod_prime_power(value.get_den(), prime, precision, modulus);
-            rep *= value.get_num();
+            mpz_class den_inv = inverse_mod_prime_power(value.get_den(), prime, precision, modulus);
+            mpz_class rep = value.get_num() * den_inv;
             normalize_mod(rep, modulus);
             return rep;
         }
@@ -174,80 +169,67 @@ class p_int {
             }
         }
 
-        void truncate_to_precision(uint64_t target_prec, const mpz_class& target_mod) {
-            if (target_prec == 0) throw /*some error*/;
-
-            if (is_exact()) {
-                int_p_ = finite_rep_from_q(exact_q_, prime_, target_mod, target_prec);
-                exact_q_ = 0;
-            } else {
-                if (precision_ == target_prec) return;
-                normalize_mod(int_p_, target_mod);
-            }
-
-            precision_ = target_prec;
-            modulus_ = target_mod;
-        }
-
     public:
         //コンストラクタ
-
-        // uncheck mod z
-        p_int(unchecked_prime_t, mpz_class value, uint64_t prime, uint64_t precision, mpz_class modulus)
+        p_int(unchecked_prime_t, mpz_class value, uint64_t prime, uint64_t precision)
             : prime_(prime),
               precision_(precision),
-              modulus_(precision == 0 ? mpz_class(0) : std::move(modulus)),
+              modulus_(precision == 0 ? mpz_class(0) : make_modulus(prime_, precision_)),
               int_p_(precision == 0 ? mpz_class(0) : std::move(value)),
               exact_q_(precision == 0 ? mpq_class(value) : mpq_class(0)) {
-
-            normalize();
+            if (is_exact()) {
+                exact_q_.canonicalize();
+                require_p_integral(exact_q_, prime_);
+            } else {
+                normalize();
+            }
         }
 
-        // uncheck mod q
-        p_int(unchecked_prime_t, mpq_class value, uint64_t prime, uint64_t precision, mpz_class modulus)
+        p_int(mpz_class value, uint64_t prime, uint64_t precision)
+            : p_int(unchecked_prime, std::move(value), checked_prime(prime), precision) {}
+
+        p_int(unchecked_prime_t, mpq_class value, uint64_t prime, uint64_t precision)
             : prime_(prime),
               precision_(precision),
-              modulus_(precision == 0 ? mpz_class(0) : std::move(modulus)),
+              modulus_(precision == 0 ? mpz_class(0) : make_modulus(prime_, precision_)),
               int_p_(0),
               exact_q_(0) {
-
             value.canonicalize();
             require_p_integral(value, prime_);
 
             if (is_exact()) {
                 exact_q_ = std::move(value);
+                exact_q_.canonicalize();
             } else {
                 int_p_ = finite_rep_from_q(value, prime_, modulus_, precision_);
             }
         }
 
-        // check nomod z  -->  uncheck nomod z
-        p_int(mpz_class value, uint64_t prime, uint64_t precision)
-            : p_int(unchecked_prime, std::move(value), checked_prime(prime), precision) {}
-
-        // check nomod q  -->  uncheck nomod q
         p_int(mpq_class value, uint64_t prime, uint64_t precision)
             : p_int(unchecked_prime, std::move(value), checked_prime(prime), precision) {}
 
-        // check nomod T  -->  check nomod z
         template <std::integral T>
         p_int(T value, uint64_t prime, uint64_t precision)
-            : p_int(mpz_class(value), prime, precision) {}
+            : p_int(to_mpz(value), prime, precision) {}
 
-        // uncheck nomod z  -->  uncheck mod z
-        p_int(unchecked_prime_t tag, mpz_class value, uint64_t prime, uint64_t precision)
-            : p_int(tag, std::move(value), prime, precision, precision == 0 ? mpz_class(0) : make_modulus(prime, precision)) {}
-
-        // uncheck nomod q  -->  uncheck mod q
-        p_int(unchecked_prime_t tag, mpq_class value, uint64_t prime, uint64_t precision)
-            : p_int(tag, std::move(value), prime, precision, precision == 0 ? mpz_class(0) : make_modulus(prime, precision)) {}
+        template <std::integral T>
+        p_int(unchecked_prime_t tag, T value, uint64_t prime, uint64_t precision)
+            : p_int(tag, to_mpz(value), prime, precision) {}
 
         //各要素取得
-        bool is_exact() const { return precision_ == 0; }
-        uint64_t prime() const { return prime_; }
-        uint64_t precision() const { return precision_; }
+        bool is_exact() const {
+            return precision_ == 0;
+        }
 
-        //representative: 代表元
+        uint64_t prime() const {
+            return prime_;
+        }
+
+        uint64_t precision() const {
+            return precision_;
+        }
+
+        //reprentative: 代表元
         const mpz_class& rep() const {
             if (is_exact()) {
                 throw std::logic_error("p_int::rep() is only valid for finite values");
@@ -274,12 +256,12 @@ class p_int {
 
         //精度変更、より精度が低い方に変更する
         p_int to_precision(uint64_t target_precision) const {
-            if (precision_ == target_precision) {
-                return *this;
-            }
-
             if (target_precision == 0) {
-                throw std::domain_error("cannot recover an exact p_int from a finite value");
+                if (!is_exact()) {
+                    throw std::domain_error("cannot recover an exact p_int from a finite value");
+                }
+
+                return *this;
             }
 
             if (is_exact()) {
@@ -293,59 +275,33 @@ class p_int {
             return p_int(unchecked_prime, int_p_, prime_, target_precision);
         }
 
-        friend bool operator==(const p_int& lhs, const p_int& rhs) {
-            if (lhs.prime_ != rhs.prime_ || lhs.precision_ != rhs.precision_) return false;
-
-            if (lhs.is_exact()) {
-                return lhs.exact_q_ == rhs.exact_q_;
-            } else {
-                return lhs.int_p_ == rhs.int_p_;
-            }
-        }
-
-        friend bool operator!=(const p_int& lhs, const p_int& rhs) {
-            return !(lhs == rhs);
-        }
-
         //足し算
         p_int& operator+=(const p_int& rhs) {
             require_same_prime(rhs);
 
-            if (precision_ == rhs.precision_) {
-                if (is_exact()) {
-                    exact_q_ += rhs.exact_q_;
-                } else {
-                    int_p_ += rhs.int_p_;
-                    if (int_p_ >= modulus_) {
-                        int_p_ -= modulus_;
-                    }
-                }
+            if (is_exact() && rhs.is_exact()) {
+                exact_q_ += rhs.exact_q_;
+                exact_q_.canonicalize();
                 return *this;
             }
 
-            auto [target_prec, target_mod] = combine_precision_info(*this, rhs);
-            this->truncate_to_precision(target_prec, target_mod);
-
-            if (!rhs.is_exact()) {
-                int_p_ += rhs.int_p_;
-            } else {
-                int_p_ += finite_rep_from_q(rhs.exact_q_, prime_, target_mod, target_prec);
-            }
-
-            normalize_mod(int_p_, modulus_);
-
+            uint64_t precision = combine_precision(precision_, rhs.precision_);
+            p_int l = to_precision(precision);
+            p_int r = rhs.to_precision(precision);
+            l.int_p_ += r.int_p_;
+            l.normalize();
+            *this = std::move(l);
             return *this;
         }
 
         template <integer_like T>
         p_int& operator+=(T&& rhs) {
-            if (is_exact()) {
-                exact_q_ += std::forward<T>(rhs);
-            } else {
-                int_p_ += std::forward<T>(rhs);
-                normalize_mod(int_p_, modulus_);
-            }
-            return *this;
+            return *this += p_int(
+                unchecked_prime,
+                std::forward<T>(rhs),
+                prime_,
+                0
+            );
         }
 
         friend p_int operator+(p_int lhs, const p_int& rhs) {
@@ -360,50 +316,45 @@ class p_int {
         }
 
         template <integer_like T>
-        friend p_int operator+(T&& lhs, p_int rhs) {
-            rhs += std::forward<T>(lhs);
-            return rhs;
+        friend p_int operator+(T&& lhs, const p_int& rhs) {
+            p_int result(
+                unchecked_prime,
+                std::forward<T>(lhs),
+                rhs.prime_,
+                0
+            );
+
+            result += rhs;
+            return result;
         }
 
         //引き算
         p_int& operator-=(const p_int& rhs) {
             require_same_prime(rhs);
 
-            if (precision_ == rhs.precision_) {
-                if (is_exact()) {
-                    exact_q_ -= rhs.exact_q_;
-                } else {
-                    int_p_ -= rhs.int_p_;
-                    if (int_p_ < 0) {
-                        int_p_ += modulus_;
-                    }
-                }
+            if (is_exact() && rhs.is_exact()) {
+                exact_q_ -= rhs.exact_q_;
+                exact_q_.canonicalize();
                 return *this;
             }
 
-            auto [target_prec, target_mod] = combine_precision_info(*this, rhs);
-            this->truncate_to_precision(target_prec, target_mod);
-
-            if (!rhs.is_exact()) {
-                int_p_ -= rhs.int_p_;
-            } else {
-                int_p_ -= finite_rep_from_q(rhs.exact_q_, prime_, target_mod, target_prec);
-            }
-
-            normalize_mod(int_p_, modulus_);
-
+            uint64_t precision = combine_precision(precision_, rhs.precision_);
+            p_int l = to_precision(precision);
+            p_int r = rhs.to_precision(precision);
+            l.int_p_ -= r.int_p_;
+            l.normalize();
+            *this = std::move(l);
             return *this;
         }
 
         template <integer_like T>
         p_int& operator-=(T&& rhs) {
-            if (is_exact()) {
-                exact_q_ -= std::forward<T>(rhs);
-            } else {
-                int_p_ -= std::forward<T>(rhs);
-                normalize_mod(int_p_, modulus_);
-            }
-            return *this;
+            return *this -= p_int(
+                unchecked_prime,
+                std::forward<T>(rhs),
+                prime_,
+                0
+            );
         }
 
         friend p_int operator-(p_int lhs, const p_int& rhs) {
@@ -418,24 +369,26 @@ class p_int {
         }
 
         template <integer_like T>
-        friend p_int operator-(T&& lhs, p_int rhs) {
-            if (rhs.is_exact()) {
-                rhs.exact_q_ = std::forward<T>(lhs) - rhs.exact_q_;
-            } else {
-                rhs.int_p_ = std::forward<T>(lhs) - rhs.int_p_;
-                normalize_mod(rhs.int_p_, rhs.modulus_);
-            }
-            return rhs;
+        friend p_int operator-(T&& lhs, const p_int& rhs) {
+            p_int result(
+                unchecked_prime,
+                std::forward<T>(lhs),
+                rhs.prime_,
+                0
+            );
+
+            result -= rhs;
+            return result;
         }
 
         p_int operator-() const {
             p_int res(*this);
             if (res.is_exact()) {
                 res.exact_q_ = -res.exact_q_;
+                res.exact_q_.canonicalize();
             } else {
-                if (res.int_p_ != 0) {
-                    res.int_p_ = res.modulus_ - res.int_p_;
-                }
+                res.int_p_ = -res.int_p_;
+                res.normalize();
             }
             return res;
         }
@@ -444,43 +397,29 @@ class p_int {
         p_int& operator*=(const p_int& rhs) {
             require_same_prime(rhs);
 
-            if (precision_ == rhs.precision_) {
-                if (is_exact()) {
-                    exact_q_ *= rhs.exact_q_;
-                } else {
-                    int_p_ *= rhs.int_p_;
-                    normalize_mod(int_p_, modulus_);
-                }
+            if (is_exact() && rhs.is_exact()) {
+                exact_q_ *= rhs.exact_q_;
+                exact_q_.canonicalize();
                 return *this;
             }
 
-            auto [target_prec, target_mod] = combine_precision_info(*this, rhs);
-            truncate_to_precision(target_prec, target_mod);
-
-            if (!rhs.is_exact()) {
-                if (rhs.precision_ > target_prec) {
-                    int_p_ *= (rhs.int_p_ % target_mod);
-                } else {
-                    int_p_ *= rhs.int_p_;
-                }
-            } else {
-                int_p_ *= finite_rep_from_q(rhs.exact_q_, prime_, target_mod, target_prec);
-            }
-
-            normalize_mod(int_p_, modulus_);
-
+            uint64_t precision = combine_precision(precision_, rhs.precision_);
+            p_int l = to_precision(precision);
+            p_int r = rhs.to_precision(precision);
+            l.int_p_ *= r.int_p_;
+            l.normalize();
+            *this = std::move(l);
             return *this;
         }
 
         template <integer_like T>
         p_int& operator*=(T&& rhs) {
-            if (is_exact()) {
-                exact_q_ *= std::forward<T>(rhs);
-            } else {
-                int_p_ *= std::forward<T>(rhs);
-                normalize_mod(int_p_, modulus_);
-            }
-            return *this;
+            return *this *= p_int(
+                unchecked_prime,
+                std::forward<T>(rhs),
+                prime_,
+                0
+            );
         }
 
         friend p_int operator*(p_int lhs, const p_int& rhs) {
@@ -495,15 +434,21 @@ class p_int {
         }
 
         template <integer_like T>
-        friend p_int operator*(T&& lhs, p_int rhs) {
-            rhs *= std::forward<T>(lhs);
-            return rhs;
+        friend p_int operator*(T&& lhs, const p_int& rhs) {
+            p_int result(
+                unchecked_prime,
+                std::forward<T>(lhs),
+                rhs.prime_,
+                0
+            );
+
+            result *= rhs;
+            return result;
         }
 
         //割り算
         bool is_zero() const {
             return is_exact() ? exact_q_ == 0 : int_p_ == 0;
-            // return (exact_q_ == 0) && (int_p_ == 0);
         }
 
         bool is_unit() const {
@@ -512,7 +457,7 @@ class p_int {
                 return !divisible_by_prime(exact_q_.get_num(), prime_);
             }
 
-            return !divisible_by_prime(int_p_, prime_);
+            return int_p_ % from_uint64(prime_) != 0;
         }
 
         p_int inverse() const {
@@ -521,13 +466,14 @@ class p_int {
             }
 
             if (is_exact()) {
-                mpq_class inv = 1 / exact_q_;
-                // もうunitと確定しているので、逆数の分母はpで割り切れない
+                mpq_class inv(exact_q_.get_den(), exact_q_.get_num());
+                inv.canonicalize();
+                require_p_integral(inv, prime_);
                 return p_int(unchecked_prime, std::move(inv), prime_, 0);
             }
 
             mpz_class inv = inverse_mod_prime_power(int_p_, prime_, precision_, modulus_);
-            return p_int(unchecked_prime, std::move(inv), prime_, precision_, modulus_);
+            return p_int(unchecked_prime, std::move(inv), prime_, precision_);
         }
 
         p_int& operator/=(const p_int& rhs) {
@@ -536,50 +482,34 @@ class p_int {
                 throw std::domain_error("cannot divide p_int by zero");
             }
 
-            if (precision_ == rhs.precision_) {
-                if (is_exact()) {
-                    exact_q_ /= rhs.exact_q_;
-                    require_p_integral(exact_q_, prime_);
-                } else {
-                    int_p_ *= inverse_mod_prime_power(rhs.int_p_, prime_, precision_, modulus_);
-                    normalize_mod(int_p_, modulus_);
-                }
+            if (is_exact() && rhs.is_exact()) {
+                mpq_class result = exact_q_ / rhs.exact_q_;
+                result.canonicalize();
+                require_p_integral(result, prime_);
+                *this = p_int(unchecked_prime, std::move(result), prime_, 0);
                 return *this;
             }
 
-            auto [target_prec, target_mod] = combine_precision_info(*this, rhs);
-            truncate_to_precision(target_prec, target_mod);
-
-            if (!rhs.is_exact()) {
-                if (rhs.precision_ == target_prec) {
-                    int_p_ *= inverse_mod_prime_power(rhs.int_p_, prime_, target_prec, target_mod);
-                } else {
-                    mpz_class rhs_val = rhs.int_p_ % target_mod;
-                    int_p_ *= inverse_mod_prime_power(rhs_val, prime_, target_prec, target_mod);
-                } 
-            } else {
-                int_p_ *= inverse_mod_prime_power(rhs.exact_q_.get_num(), prime_, target_prec, target_mod);
-                int_p_ *= rhs.exact_q_.get_den();
+            uint64_t precision = combine_precision(precision_, rhs.precision_);
+            p_int l = to_precision(precision);
+            p_int r = rhs.to_precision(precision);
+            if (!r.is_unit()) {
+                throw std::domain_error("finite p_int division currently requires a unit divisor");
             }
-            normalize_mod(int_p_, modulus_);
 
+            l *= r.inverse();
+            *this = std::move(l);
             return *this;
         }
 
         template <integer_like T>
         p_int& operator/=(T&& rhs) {
-            if (rhs == 0) {
-                throw std::domain_error("cannot divide p_int by zero");
-            }
-
-            if (is_exact()) {
-                exact_q_ /= std::forward<T>(rhs);
-                require_p_integral(exact_q_, prime_);
-            } else {
-                int_p_ *= inverse_mod_prime_power(std::forward<T>(rhs), prime_, precision_, modulus_);
-                normalize_mod(int_p_, modulus_);
-            }
-            return *this;
+            return *this /= p_int(
+                unchecked_prime,
+                std::forward<T>(rhs),
+                prime_,
+                0
+            );
         }
 
         friend p_int operator/(p_int lhs, const p_int& rhs) {
@@ -594,19 +524,16 @@ class p_int {
         }
 
         template <integer_like T>
-        friend p_int operator/(T&& lhs, p_int rhs) {
-            if (rhs.is_zero()) {
-                throw std::domain_error("cannot divide by zero p_int");
-            }
+        friend p_int operator/(T&& lhs, const p_int& rhs) {
+            p_int result(
+                unchecked_prime,
+                std::forward<T>(lhs),
+                rhs.prime_,
+                0
+            );
 
-            if (rhs.is_exact()) {
-                rhs.exact_q_ = std::forward<T>(lhs) / rhs.exact_q_;
-                require_p_integral(rhs.exact_q_, rhs.prime_);
-            } else {
-                rhs.int_p_ = inverse_mod_prime_power(rhs.int_p_, rhs.prime_, rhs.precision_, rhs.modulus_) * std::forward<T>(lhs);
-                normalize_mod(rhs.int_p_, rhs.modulus_);
-            }
-            return rhs;
+            result /= rhs;
+            return result;
         }
 
         //テスト用整数回累乗
